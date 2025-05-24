@@ -10,6 +10,10 @@ use move_binary_format::{
     errors::*,
     file_format::{Constant, SignatureToken, VariantTag},
 };
+use std::borrow::Borrow;
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use move_core_types::annotated_value as A;
 use move_core_types::{
     VARIANT_COUNT_MAX,
