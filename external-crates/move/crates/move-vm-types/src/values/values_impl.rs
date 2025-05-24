@@ -108,6 +108,23 @@ enum GlobalDataStatus {
     Dirty,
 }
 
+impl GlobalDataStatus {
+    fn mark_dirty(&self) {
+        match self {
+            GlobalDataStatus::Clean => *self = GlobalDataStatus::Dirty,
+            GlobalDataStatus::Dirty => {}
+        }
+    }
+}
+
+impl Clone for GlobalDataStatus {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for GlobalDataStatus {}
+
 /// A Move reference pointing to an element in a container.
 #[derive(Debug)]
 struct IndexedRef {
@@ -226,6 +243,13 @@ pub struct Variant {
 #[derive(Debug)]
 pub struct VariantRef(ContainerRef);
 
+/// A type that represents the fields of a variant.
+#[derive(Debug)]
+pub struct VariantFields<'a> {
+    pub tag: VariantTag,
+    pub fields: &'a [MoveTypeLayout],
+}
+
 /***************************************************************************************
  *
  * Misc
@@ -235,33 +259,391 @@ pub struct VariantRef(ContainerRef);
  **************************************************************************************/
 
 impl Container {
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         match self {
-            Self::Locals(r) | Self::Struct(r) | Self::Vec(r) => r.lock().unwrap().len(),
-            Self::VecU8(r) => r.lock().unwrap().len(),
-            Self::VecU16(r) => r.lock().unwrap().len(),
-            Self::VecU32(r) => r.lock().unwrap().len(),
-            Self::VecU64(r) => r.lock().unwrap().len(),
-            Self::VecU128(r) => r.lock().unwrap().len(),
-            Self::VecU256(r) => r.lock().unwrap().len(),
-            Self::VecBool(r) => r.lock().unwrap().len(),
-            Self::VecAddress(r) => r.lock().unwrap().len(),
-            Self::Variant(r) => r.lock().unwrap().1.len(),
+            Container::Locals(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::Vec(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::Struct(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecU8(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecU64(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecU128(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecBool(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecAddress(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecU16(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecU32(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::VecU256(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).len(),
+            Container::Variant(r) => r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).1.len(),
+        }
+    }
+
+    pub fn get(&self, idx: usize) -> PartialVMResult<ValueImpl> {
+        match self {
+            Container::Locals(r) => Ok(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx].clone()),
+            Container::Vec(r) => Ok(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx].clone()),
+            Container::Struct(r) => Ok(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx].clone()),
+            Container::VecU8(r) => Ok(ValueImpl::U8(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx])),
+            Container::VecU64(r) => Ok(ValueImpl::U64(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx])),
+            Container::VecU128(r) => Ok(ValueImpl::U128(Box::new(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx]))),
+            Container::VecBool(r) => Ok(ValueImpl::Bool(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx])),
+            Container::VecAddress(r) => Ok(ValueImpl::Address(Box::new(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx]))),
+            Container::VecU16(r) => Ok(ValueImpl::U16(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx])),
+            Container::VecU32(r) => Ok(ValueImpl::U32(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx])),
+            Container::VecU256(r) => Ok(ValueImpl::U256(Box::new(r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx]))),
+            Container::Variant(r) => Ok(r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).1[idx].clone()),
+        }
+    }
+
+    pub fn set(&mut self, idx: usize, val: ValueImpl) -> PartialVMResult<()> {
+        match self {
+            Container::Locals(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = val;
+                Ok(())
+            }
+            Container::Vec(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = val;
+                Ok(())
+            }
+            Container::Struct(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = val;
+                Ok(())
+            }
+            Container::VecU8(r) => {
+                if let ValueImpl::U8(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU64(r) => {
+                if let ValueImpl::U64(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU128(r) => {
+                if let ValueImpl::U128(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = *x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecBool(r) => {
+                if let ValueImpl::Bool(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecAddress(r) => {
+                if let ValueImpl::Address(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = *x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU16(r) => {
+                if let ValueImpl::U16(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU32(r) => {
+                if let ValueImpl::U32(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU256(r) => {
+                if let ValueImpl::U256(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned"))[idx] = *x;
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::Variant(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).1[idx] = val;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn push_back(&mut self, val: ValueImpl) -> PartialVMResult<()> {
+        match self {
+            Container::Locals(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(val);
+                Ok(())
+            }
+            Container::Vec(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(val);
+                Ok(())
+            }
+            Container::Struct(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(val);
+                Ok(())
+            }
+            Container::VecU8(r) => {
+                if let ValueImpl::U8(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU64(r) => {
+                if let ValueImpl::U64(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU128(r) => {
+                if let ValueImpl::U128(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(*x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecBool(r) => {
+                if let ValueImpl::Bool(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecAddress(r) => {
+                if let ValueImpl::Address(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(*x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU16(r) => {
+                if let ValueImpl::U16(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU32(r) => {
+                if let ValueImpl::U32(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::VecU256(r) => {
+                if let ValueImpl::U256(x) = val {
+                    r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).push(*x);
+                    Ok(())
+                } else {
+                    Err(PartialVMError::new(StatusCode::TYPE_MISMATCH))
+                }
+            }
+            Container::Variant(r) => {
+                r.lock().unwrap_or_else(|_| panic!("mutex poisoned")).1.push(val);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn pop_back(&mut self) -> PartialVMResult<ValueImpl> {
+        match self {
+            Container::Locals(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(guard.pop().unwrap())
+                }
+            }
+            Container::Vec(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(guard.pop().unwrap())
+                }
+            }
+            Container::Struct(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(guard.pop().unwrap())
+                }
+            }
+            Container::VecU8(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::U8(guard.pop().unwrap()))
+                }
+            }
+            Container::VecU64(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::U64(guard.pop().unwrap()))
+                }
+            }
+            Container::VecU128(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::U128(Box::new(guard.pop().unwrap())))
+                }
+            }
+            Container::VecBool(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::Bool(guard.pop().unwrap()))
+                }
+            }
+            Container::VecAddress(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::Address(Box::new(guard.pop().unwrap())))
+                }
+            }
+            Container::VecU16(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::U16(guard.pop().unwrap()))
+                }
+            }
+            Container::VecU32(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::U32(guard.pop().unwrap()))
+                }
+            }
+            Container::VecU256(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(ValueImpl::U256(Box::new(guard.pop().unwrap())))
+                }
+            }
+            Container::Variant(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                if guard.1.is_empty() {
+                    Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC))
+                } else {
+                    Ok(guard.1.pop().unwrap())
+                }
+            }
+        }
+    }
+
+    pub fn swap(&mut self, idx1: usize, idx2: usize) -> PartialVMResult<()> {
+        match self {
+            Container::Locals(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::Vec(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::Struct(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::VecU8(r) => {
+                let mut guard = r.lock().unwrap_or_else(|_| panic!("mutex poisoned"));
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            }
+            Container::VecU64(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::VecU128(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::VecBool(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::VecAddress(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::VecU16(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::VecU32(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::VecU256(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.swap(idx1, idx2);
+                Ok(())
+            }
+            Container::Variant(r) => {
+                let mut guard = r.lock().unwrap();
+                guard.1.swap(idx1, idx2);
+                Ok(())
+            }
         }
     }
 
     fn rc_count(&self) -> usize {
         match self {
-            Self::Locals(r) | Self::Struct(r) | Self::Vec(r) => Arc::strong_count(r),
-            Self::VecU8(r) => Arc::strong_count(r),
-            Self::VecU16(r) => Arc::strong_count(r),
-            Self::VecU32(r) => Arc::strong_count(r),
-            Self::VecU64(r) => Arc::strong_count(r),
-            Self::VecU128(r) => Arc::strong_count(r),
-            Self::VecU256(r) => Arc::strong_count(r),
-            Self::VecBool(r) => Arc::strong_count(r),
-            Self::VecAddress(r) => Arc::strong_count(r),
-            Self::Variant(r) => Arc::strong_count(r),
+            Container::Locals(r) => Arc::strong_count(r),
+            Container::Vec(r) => Arc::strong_count(r),
+            Container::Struct(r) => Arc::strong_count(r),
+            Container::VecU8(r) => Arc::strong_count(r),
+            Container::VecU64(r) => Arc::strong_count(r),
+            Container::VecU128(r) => Arc::strong_count(r),
+            Container::VecBool(r) => Arc::strong_count(r),
+            Container::VecAddress(r) => Arc::strong_count(r),
+            Container::VecU16(r) => Arc::strong_count(r),
+            Container::VecU32(r) => Arc::strong_count(r),
+            Container::VecU256(r) => Arc::strong_count(r),
+            Container::Variant(r) => Arc::strong_count(r),
         }
     }
 
@@ -270,397 +652,181 @@ impl Container {
     }
 
     fn equals(&self, other: &Self) -> PartialVMResult<bool> {
-        use Container::*;
-
-        let res = match (self, other) {
-            (Vec(l), Vec(r)) | (Struct(l), Struct(r)) => {
-                // Lock both mutexes in a consistent order to avoid deadlock
-                let (l_guard, r_guard) = if Arc::as_ptr(l) < Arc::as_ptr(r) {
-                    (l.lock().unwrap(), r.lock().unwrap())
-                } else {
-                    (r.lock().unwrap(), l.lock().unwrap())
-                };
-
+        match (self, other) {
+            (Container::Locals(l), Container::Locals(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
                 if l_guard.len() != r_guard.len() {
                     return Ok(false);
                 }
-                for (v1, v2) in l_guard.iter().zip(r_guard.iter()) {
-                    if !v1.equals(v2)? {
+                for (l_val, r_val) in l_guard.iter().zip(r_guard.iter()) {
+                    if !l_val.equals(r_val)? {
                         return Ok(false);
                     }
                 }
-                true
+                Ok(true)
             }
-            (VecU8(l), VecU8(r)) => {
+            (Container::Vec(l), Container::Vec(r)) => {
                 let l_guard = l.lock().unwrap();
                 let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU16(l), VecU16(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU32(l), VecU32(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU64(l), VecU64(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU128(l), VecU128(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU256(l), VecU256(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecBool(l), VecBool(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecAddress(l), VecAddress(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (Variant(l), Variant(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                let (tagl, valuesl) = &*l_guard;
-                let (tagr, valuesr) = &*r_guard;
-                if tagl != tagr {
+                if l_guard.len() != r_guard.len() {
                     return Ok(false);
                 }
-
-                if valuesl.len() != valuesr.len() {
-                    return Ok(false);
-                }
-                for (v1, v2) in valuesl.iter().zip(valuesr) {
-                    if !v1.equals(v2)? {
+                for (l_val, r_val) in l_guard.iter().zip(r_guard.iter()) {
+                    if !l_val.equals(r_val)? {
                         return Ok(false);
                     }
                 }
-                true
+                Ok(true)
             }
-            _ => false,
-        };
-
-        Ok(res)
+            (Container::Struct(l), Container::Struct(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                if l_guard.len() != r_guard.len() {
+                    return Ok(false);
+                }
+                for (l_val, r_val) in l_guard.iter().zip(r_guard.iter()) {
+                    if !l_val.equals(r_val)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            (Container::VecU8(l), Container::VecU8(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU64(l), Container::VecU64(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU128(l), Container::VecU128(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecBool(l), Container::VecBool(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecAddress(l), Container::VecAddress(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU16(l), Container::VecU16(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU32(l), Container::VecU32(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU256(l), Container::VecU256(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::Variant(l), Container::Variant(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                if l_guard.0 != r_guard.0 {
+                    return Ok(false);
+                }
+                if l_guard.1.len() != r_guard.1.len() {
+                    return Ok(false);
+                }
+                for (l_val, r_val) in l_guard.1.iter().zip(r_guard.1.iter()) {
+                    if !l_val.equals(r_val)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 
     fn raw_address(&self) -> usize {
         match self {
-            Self::Locals(r) => Arc::as_ptr(r) as usize,
-            Self::Vec(r) => Arc::as_ptr(r) as usize,
-            Self::Struct(r) => Arc::as_ptr(r) as usize,
-            Self::VecU8(r) => Arc::as_ptr(r) as usize,
-            Self::VecU16(r) => Arc::as_ptr(r) as usize,
-            Self::VecU32(r) => Arc::as_ptr(r) as usize,
-            Self::VecU64(r) => Arc::as_ptr(r) as usize,
-            Self::VecU128(r) => Arc::as_ptr(r) as usize,
-            Self::VecU256(r) => Arc::as_ptr(r) as usize,
-            Self::VecBool(r) => Arc::as_ptr(r) as usize,
-            Self::VecAddress(r) => Arc::as_ptr(r) as usize,
-            Self::Variant(r) => Arc::as_ptr(r) as usize,
-        }
-    }
-
-    fn get(&self, idx: usize) -> PartialVMResult<ValueImpl> {
-        match self {
-            Self::Locals(r) | Self::Vec(r) | Self::Struct(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(v[idx].copy_value()?)
-            }
-            Self::Variant(r) => {
-                let (_, values) = &*r.lock().unwrap();
-                if idx >= values.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, values.len())));
-                }
-                Ok(values[idx].copy_value()?)
-            }
-            Self::VecU8(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::U8(v[idx]))
-            }
-            Self::VecU16(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::U16(v[idx]))
-            }
-            Self::VecU32(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::U32(v[idx]))
-            }
-            Self::VecU64(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::U64(v[idx]))
-            }
-            Self::VecU128(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::U128(Box::new(v[idx])))
-            }
-            Self::VecU256(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::U256(Box::new(v[idx])))
-            }
-            Self::VecBool(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::Bool(v[idx]))
-            }
-            Self::VecAddress(r) => {
-                let v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                Ok(ValueImpl::Address(Box::new(v[idx])))
-            }
-        }
-    }
-
-    fn set(&mut self, idx: usize, val: ValueImpl) -> PartialVMResult<()> {
-        match self {
-            Self::Locals(r) | Self::Vec(r) | Self::Struct(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                v[idx] = val;
-                Ok(())
-            }
-            Self::Variant(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.1.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.1.len())));
-                }
-                v.1[idx] = val;
-                Ok(())
-            }
-            Self::VecU8(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::U8(x) => {
-                        v[idx] = x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected u8".to_string())),
-                }
-            }
-            Self::VecU16(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::U16(x) => {
-                        v[idx] = x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected u16".to_string())),
-                }
-            }
-            Self::VecU32(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::U32(x) => {
-                        v[idx] = x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected u32".to_string())),
-                }
-            }
-            Self::VecU64(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::U64(x) => {
-                        v[idx] = x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected u64".to_string())),
-                }
-            }
-            Self::VecU128(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::U128(x) => {
-                        v[idx] = *x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected u128".to_string())),
-                }
-            }
-            Self::VecU256(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::U256(x) => {
-                        v[idx] = *x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected u256".to_string())),
-                }
-            }
-            Self::VecBool(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::Bool(x) => {
-                        v[idx] = x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected bool".to_string())),
-                }
-            }
-            Self::VecAddress(r) => {
-                let mut v = r.lock().unwrap();
-                if idx >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
-                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
-                }
-                match val {
-                    ValueImpl::Address(x) => {
-                        v[idx] = *x;
-                        Ok(())
-                    }
-                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                        .with_message("expected address".to_string())),
-                }
-            }
+            Container::Locals(r) => Arc::as_ptr(r) as usize,
+            Container::Vec(r) => Arc::as_ptr(r) as usize,
+            Container::Struct(r) => Arc::as_ptr(r) as usize,
+            Container::VecU8(r) => Arc::as_ptr(r) as usize,
+            Container::VecU64(r) => Arc::as_ptr(r) as usize,
+            Container::VecU128(r) => Arc::as_ptr(r) as usize,
+            Container::VecBool(r) => Arc::as_ptr(r) as usize,
+            Container::VecAddress(r) => Arc::as_ptr(r) as usize,
+            Container::VecU16(r) => Arc::as_ptr(r) as usize,
+            Container::VecU32(r) => Arc::as_ptr(r) as usize,
+            Container::VecU256(r) => Arc::as_ptr(r) as usize,
+            Container::Variant(r) => Arc::as_ptr(r) as usize,
         }
     }
 
     fn take_unique_ownership<T>(r: Arc<Mutex<T>>) -> PartialVMResult<T> {
         match Arc::try_unwrap(r) {
             Ok(mutex) => Ok(mutex.into_inner().unwrap()),
-            Err(_) => Err(PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                .with_message("cannot take unique ownership of shared value".to_string())),
+            Err(_) => Err(PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)),
         }
     }
 
     fn assign(&mut self, new: ValueImpl) -> PartialVMResult<()> {
         match (self, new) {
-            (Container::Locals(r), ValueImpl::Container(Container::Locals(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::Locals(l), ValueImpl::Container(Container::Locals(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::Vec(r), ValueImpl::Container(Container::Vec(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::Vec(l), ValueImpl::Container(Container::Vec(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::Struct(r), ValueImpl::Container(Container::Struct(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::Struct(l), ValueImpl::Container(Container::Struct(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecU8(r), ValueImpl::Container(Container::VecU8(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecU8(l), ValueImpl::Container(Container::VecU8(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecU16(r), ValueImpl::Container(Container::VecU16(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecU64(l), ValueImpl::Container(Container::VecU64(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecU32(r), ValueImpl::Container(Container::VecU32(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecU128(l), ValueImpl::Container(Container::VecU128(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecU64(r), ValueImpl::Container(Container::VecU64(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecBool(l), ValueImpl::Container(Container::VecBool(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecU128(r), ValueImpl::Container(Container::VecU128(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecAddress(l), ValueImpl::Container(Container::VecAddress(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecU256(r), ValueImpl::Container(Container::VecU256(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecU16(l), ValueImpl::Container(Container::VecU16(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecBool(r), ValueImpl::Container(Container::VecBool(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecU32(l), ValueImpl::Container(Container::VecU32(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::VecAddress(r), ValueImpl::Container(Container::VecAddress(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::VecU256(l), ValueImpl::Container(Container::VecU256(r))) => {
+                *l = r;
                 Ok(())
             }
-            (Container::Variant(r), ValueImpl::Container(Container::Variant(new))) => {
-                *r.lock().unwrap() = take_unique_ownership(new)?;
+            (Container::Variant(l), ValueImpl::Container(Container::Variant(r))) => {
+                *l = r;
                 Ok(())
             }
-            _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
-                .with_message("type mismatch in assignment".to_string())),
+            _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)),
         }
     }
 }
@@ -687,14 +853,72 @@ fn take_unique_ownership<T: Debug>(r: Arc<Mutex<T>>) -> PartialVMResult<T> {
 impl ContainerRef {
     fn container(&self) -> &Container {
         match self {
-            Self::Local(container) | Self::Global { container, .. } => container,
+            ContainerRef::Local(c) => c,
+            ContainerRef::Global { container, .. } => container,
         }
     }
 
     fn mark_dirty(&self) {
-        if let Self::Global { status, .. } = self {
-            let mut guard = status.lock().unwrap();
-            *guard = GlobalDataStatus::Dirty;
+        match self {
+            ContainerRef::Local(_) => {}
+            ContainerRef::Global { status, .. } => status.mark_dirty(),
+        }
+    }
+
+    fn copy_value(&self) -> Self {
+        match self {
+            ContainerRef::Local(c) => ContainerRef::Local(c.copy_value()),
+            ContainerRef::Global { status, container } => ContainerRef::Global {
+                status: status.clone(),
+                container: container.copy_value(),
+            },
+        }
+    }
+
+    fn equals(&self, other: &Self) -> PartialVMResult<bool> {
+        match (self, other) {
+            (ContainerRef::Local(l), ContainerRef::Local(r)) => l.equals(r),
+            (ContainerRef::Global { container: l, .. }, ContainerRef::Global { container: r, .. }) => {
+                l.equals(r)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn read_ref(self) -> PartialVMResult<Value> {
+        match self {
+            ContainerRef::Local(c) => Ok(Value(ValueImpl::Container(c))),
+            ContainerRef::Global { status, container } => {
+                status.mark_dirty();
+                Ok(Value(ValueImpl::Container(container)))
+            }
+        }
+    }
+
+    fn write_ref(self, x: Value) -> PartialVMResult<()> {
+        match (self, x.0) {
+            (ContainerRef::Local(c), ValueImpl::Container(new)) => {
+                c.assign(new)?;
+                Ok(())
+            }
+            (ContainerRef::Global { status, mut container }, ValueImpl::Container(new)) => {
+                container.assign(new)?;
+                status.mark_dirty();
+                Ok(())
+            }
+            _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                .with_message("expected container".to_string())),
+        }
+    }
+
+    fn borrow_elem(&self, idx: usize) -> PartialVMResult<ValueImpl> {
+        match self {
+            ContainerRef::Local(c) => c.get(idx),
+            ContainerRef::Global { status, container } => {
+                let val = container.get(idx)?;
+                status.mark_dirty();
+                Ok(val)
+            }
         }
     }
 }
@@ -839,9 +1063,44 @@ impl Container {
 
 impl IndexedRef {
     fn copy_value(&self) -> Self {
-        Self {
+        IndexedRef {
             idx: self.idx,
             container_ref: self.container_ref.copy_value(),
+        }
+    }
+
+    fn equals(&self, other: &Self) -> PartialVMResult<bool> {
+        if self.idx != other.idx {
+            return Ok(false);
+        }
+        self.container_ref.equals(&other.container_ref)
+    }
+
+    fn read_ref(self) -> PartialVMResult<Value> {
+        match self.container_ref {
+            ContainerRef::Local(c) => {
+                let val = c.get(self.idx)?;
+                Ok(Value(val))
+            }
+            ContainerRef::Global { status, container } => {
+                let val = container.get(self.idx)?;
+                status.mark_dirty();
+                Ok(Value(val))
+            }
+        }
+    }
+
+    fn write_ref(self, x: Value) -> PartialVMResult<()> {
+        match self.container_ref {
+            ContainerRef::Local(c) => {
+                c.set(self.idx, x.0)?;
+                Ok(())
+            }
+            ContainerRef::Global { status, mut container } => {
+                container.set(self.idx, x.0)?;
+                status.mark_dirty();
+                Ok(())
+            }
         }
     }
 }
@@ -922,109 +1181,104 @@ impl ValueImpl {
 
 impl Container {
     fn equals(&self, other: &Self) -> PartialVMResult<bool> {
-        use Container::*;
-
-        let res = match (self, other) {
-            (Vec(l), Vec(r)) | (Struct(l), Struct(r)) => {
-                // Lock both mutexes in a consistent order to avoid deadlock
-                let (l_guard, r_guard) = if Arc::as_ptr(l) < Arc::as_ptr(r) {
-                    (l.lock().unwrap(), r.lock().unwrap())
-                } else {
-                    (r.lock().unwrap(), l.lock().unwrap())
-                };
-
+        match (self, other) {
+            (Container::Locals(l), Container::Locals(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
                 if l_guard.len() != r_guard.len() {
                     return Ok(false);
                 }
-                for (v1, v2) in l_guard.iter().zip(r_guard.iter()) {
-                    if !v1.equals(v2)? {
+                for (l_val, r_val) in l_guard.iter().zip(r_guard.iter()) {
+                    if !l_val.equals(r_val)? {
                         return Ok(false);
                     }
                 }
-                true
+                Ok(true)
             }
-            (VecU8(l), VecU8(r)) => {
+            (Container::Vec(l), Container::Vec(r)) => {
                 let l_guard = l.lock().unwrap();
                 let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU16(l), VecU16(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU32(l), VecU32(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU64(l), VecU64(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU128(l), VecU128(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecU256(l), VecU256(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecBool(l), VecBool(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (VecAddress(l), VecAddress(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                l_guard.eq(&*r_guard)
-            }
-            (Variant(l), Variant(r)) => {
-                let l_guard = l.lock().unwrap();
-                let r_guard = r.lock().unwrap();
-                let (tagl, valuesl) = &*l_guard;
-                let (tagr, valuesr) = &*r_guard;
-                if tagl != tagr {
+                if l_guard.len() != r_guard.len() {
                     return Ok(false);
                 }
-
-                if valuesl.len() != valuesr.len() {
-                    return Ok(false);
-                }
-                for (v1, v2) in valuesl.iter().zip(valuesr) {
-                    if !v1.equals(v2)? {
+                for (l_val, r_val) in l_guard.iter().zip(r_guard.iter()) {
+                    if !l_val.equals(r_val)? {
                         return Ok(false);
                     }
                 }
-                true
+                Ok(true)
             }
-
-            (Locals(_), _)
-            | (Vec(_), _)
-            | (Struct(_), _)
-            | (VecU8(_), _)
-            | (VecU16(_), _)
-            | (VecU32(_), _)
-            | (VecU64(_), _)
-            | (VecU128(_), _)
-            | (VecU256(_), _)
-            | (VecBool(_), _)
-            | (VecAddress(_), _)
-            | (Variant { .. }, _) => {
-                return Err(
-                    PartialVMError::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!(
-                        "cannot compare container values: {:?}, {:?}",
-                        self, other
-                    )),
-                );
+            (Container::Struct(l), Container::Struct(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                if l_guard.len() != r_guard.len() {
+                    return Ok(false);
+                }
+                for (l_val, r_val) in l_guard.iter().zip(r_guard.iter()) {
+                    if !l_val.equals(r_val)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
             }
-        };
-
-        Ok(res)
+            (Container::VecU8(l), Container::VecU8(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU64(l), Container::VecU64(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU128(l), Container::VecU128(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecBool(l), Container::VecBool(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecAddress(l), Container::VecAddress(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU16(l), Container::VecU16(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU32(l), Container::VecU32(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::VecU256(l), Container::VecU256(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                Ok(l_guard == r_guard)
+            }
+            (Container::Variant(l), Container::Variant(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                if l_guard.0 != r_guard.0 {
+                    return Ok(false);
+                }
+                if l_guard.1.len() != r_guard.1.len() {
+                    return Ok(false);
+                }
+                for (l_val, r_val) in l_guard.1.iter().zip(r_guard.1.iter()) {
+                    if !l_val.equals(r_val)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 }
 
@@ -1062,11 +1316,8 @@ impl IndexedRef {
             }
 
             (VecU8(r1), VecU8(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
-            (VecU16(r1), VecU16(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
-            (VecU32(r1), VecU32(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
             (VecU64(r1), VecU64(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
             (VecU128(r1), VecU128(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
-            (VecU256(r1), VecU256(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
             (VecBool(r1), VecBool(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
             (VecAddress(r1), VecAddress(r2)) => r1.lock().unwrap()[self.idx] == r2.lock().unwrap()[other.idx],
 
@@ -1592,117 +1843,67 @@ impl VariantRef {
 
 impl Locals {
     pub fn borrow_loc(&self, idx: usize) -> PartialVMResult<Value> {
-        // TODO: this is very similar to SharedContainer::borrow_elem. Find a way to
-        // reuse that code?
-
-        let v = self.0.borrow();
-        if idx >= v.len() {
-            return Err(
-                PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(
-                    format!(
-                        "index out of bounds when borrowing local: got: {}, len: {}",
-                        idx,
-                        v.len()
-                    ),
-                ),
-            );
+        let locals = self.0.borrow();
+        if idx >= locals.len() {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index {} out of bounds for length {}", idx, locals.len())));
         }
-
-        match &v[idx] {
-            ValueImpl::Container(c) => Ok(Value(ValueImpl::ContainerRef(Box::new(
-                ContainerRef::Local(c.copy_by_ref()),
-            )))),
-
-            ValueImpl::U8(_)
-            | ValueImpl::U16(_)
-            | ValueImpl::U32(_)
-            | ValueImpl::U64(_)
-            | ValueImpl::U128(_)
-            | ValueImpl::U256(_)
-            | ValueImpl::Bool(_)
-            | ValueImpl::Address(_) => Ok(Value(ValueImpl::IndexedRef(Box::new(IndexedRef {
-                container_ref: ContainerRef::Local(Container::Locals(Rc::clone(&self.0))),
-                idx,
-            })))),
-
-            ValueImpl::ContainerRef(_) | ValueImpl::Invalid | ValueImpl::IndexedRef(_) => Err(
-                PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                    .with_message(format!("cannot borrow local {:?}", &v[idx])),
-            ),
+        match &locals[idx] {
+            ValueImpl::Invalid => Err(PartialVMError::new(StatusCode::LOCAL_REFERENCE_ERROR)
+                .with_message(format!("local {} is not initialized", idx))),
+            _ => Ok(Value(locals[idx].copy_value()?)),
         }
-    }
-}
-
-impl SignerRef {
-    pub fn borrow_signer(&self) -> PartialVMResult<Value> {
-        Ok(Value(self.0.borrow_elem(0)?))
-    }
-}
-
-/***************************************************************************************
- *
- * Locals
- *
- *   Public APIs for Locals to support reading, writing and moving of values.
- *
- **************************************************************************************/
-impl Locals {
-    pub fn new(n: usize) -> Self {
-        Self(Arc::new(Mutex::new(
-            iter::repeat_with(|| ValueImpl::Invalid).take(n).collect(),
-        )))
     }
 
     pub fn copy_loc(&self, idx: usize) -> PartialVMResult<Value> {
-        let v = self.0.borrow();
-        match v.get(idx) {
-            Some(ValueImpl::Invalid) => Err(PartialVMError::new(
-                StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
-            )
-            .with_message(format!("cannot copy invalid value at index {}", idx))),
-            Some(v) => Ok(Value(v.copy_value()?)),
-            None => Err(
-                PartialVMError::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
-                    format!("local index out of bounds: got {}, len: {}", idx, v.len()),
-                ),
-            ),
+        let locals = self.0.borrow();
+        if idx >= locals.len() {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index {} out of bounds for length {}", idx, locals.len())));
+        }
+        match &locals[idx] {
+            ValueImpl::Invalid => Err(PartialVMError::new(StatusCode::LOCAL_REFERENCE_ERROR)
+                .with_message(format!("local {} is not initialized", idx))),
+            _ => Ok(Value(locals[idx].copy_value()?)),
         }
     }
 
     fn swap_loc(&mut self, idx: usize, x: Value, violation_check: bool) -> PartialVMResult<Value> {
-        let mut v = self.0.borrow_mut();
-        match v.get_mut(idx) {
-            Some(v) => {
-                if violation_check {
-                    if let ValueImpl::Container(c) = v {
-                        if c.rc_count() > 1 {
-                            return Err(PartialVMError::new(
-                                StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
-                            )
-                            .with_message(
-                                "moving container with dangling references".to_string(),
-                            ));
-                        }
-                    }
-                }
-                Ok(Value(std::mem::replace(v, x.0)))
-            }
-            None => Err(
-                PartialVMError::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
-                    format!("local index out of bounds: got {}, len: {}", idx, v.len()),
-                ),
-            ),
+        let mut locals = self.0.borrow_mut();
+        if idx >= locals.len() {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index {} out of bounds for length {}", idx, locals.len())));
         }
+        if violation_check {
+            match &locals[idx] {
+                ValueImpl::Invalid => {
+                    return Err(PartialVMError::new(StatusCode::LOCAL_REFERENCE_ERROR)
+                        .with_message(format!("local {} is not initialized", idx)))
+                }
+                _ => {}
+            }
+        }
+        let old = std::mem::replace(&mut locals[idx], x.0);
+        Ok(Value(old))
     }
 
     pub fn move_loc(&mut self, idx: usize, violation_check: bool) -> PartialVMResult<Value> {
-        match self.swap_loc(idx, Value(ValueImpl::Invalid), violation_check)? {
-            Value(ValueImpl::Invalid) => Err(PartialVMError::new(
-                StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
-            )
-            .with_message(format!("cannot move invalid value at index {}", idx))),
-            v => Ok(v),
+        let mut locals = self.0.borrow_mut();
+        if idx >= locals.len() {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index {} out of bounds for length {}", idx, locals.len())));
         }
+        if violation_check {
+            match &locals[idx] {
+                ValueImpl::Invalid => {
+                    return Err(PartialVMError::new(StatusCode::LOCAL_REFERENCE_ERROR)
+                        .with_message(format!("local {} is not initialized", idx)))
+                }
+                _ => {}
+            }
+        }
+        let old = std::mem::replace(&mut locals[idx], ValueImpl::Invalid);
+        Ok(Value(old))
     }
 
     pub fn store_loc(
@@ -1711,43 +1912,54 @@ impl Locals {
         x: Value,
         violation_check: bool,
     ) -> PartialVMResult<()> {
-        self.swap_loc(idx, x, violation_check)?;
+        let mut locals = self.0.borrow_mut();
+        if idx >= locals.len() {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index {} out of bounds for length {}", idx, locals.len())));
+        }
+        if violation_check {
+            match &locals[idx] {
+                ValueImpl::Invalid => {}
+                _ => {
+                    return Err(PartialVMError::new(StatusCode::LOCAL_REFERENCE_ERROR)
+                        .with_message(format!("local {} is already initialized", idx)))
+                }
+            }
+        }
+        locals[idx] = x.0;
         Ok(())
     }
 
-    /// Drop all Move values onto a different Vec to avoid leaking memory.
-    /// References are excluded since they may point to invalid data.
     pub fn drop_all_values(&mut self) -> impl Iterator<Item = (usize, Value)> {
         let mut locals = self.0.borrow_mut();
-        let mut res = vec![];
-
-        for idx in 0..locals.len() {
-            match &locals[idx] {
-                ValueImpl::Invalid => (),
-                ValueImpl::ContainerRef(_) | ValueImpl::IndexedRef(_) => {
-                    locals[idx] = ValueImpl::Invalid;
+        locals
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(idx, val)| {
+                if matches!(val, ValueImpl::Invalid) {
+                    None
+                } else {
+                    let old = std::mem::replace(val, ValueImpl::Invalid);
+                    Some((idx, Value(old)))
                 }
-                _ => res.push((
-                    idx,
-                    Value(std::mem::replace(&mut locals[idx], ValueImpl::Invalid)),
-                )),
-            }
-        }
-
-        res.into_iter()
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     pub fn is_invalid(&self, idx: usize) -> PartialVMResult<bool> {
-        let v = self.0.borrow();
-        match v.get(idx) {
-            Some(ValueImpl::Invalid) => Ok(true),
-            Some(_) => Ok(false),
-            None => Err(
-                PartialVMError::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
-                    format!("local index out of bounds: got {}, len: {}", idx, v.len()),
-                ),
-            ),
+        let locals = self.0.borrow();
+        if idx >= locals.len() {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index {} out of bounds for length {}", idx, locals.len())));
         }
+        Ok(matches!(locals[idx], ValueImpl::Invalid))
+    }
+}
+
+impl SignerRef {
+    pub fn borrow_signer(&self) -> PartialVMResult<Value> {
+        Ok(Value(self.0.borrow_elem(0)?))
     }
 }
 
@@ -2759,176 +2971,57 @@ fn check_elem_layout(ty: &Type, v: &Container) -> PartialVMResult<()> {
 
 impl VectorRef {
     pub fn len(&self, type_param: &Type) -> PartialVMResult<Value> {
-        let c = self.0.container();
-        check_elem_layout(type_param, c)?;
-
-        let len = match c {
-            Container::VecU8(r) => r.borrow().len(),
-            Container::VecU16(r) => r.borrow().len(),
-            Container::VecU32(r) => r.borrow().len(),
-            Container::VecU64(r) => r.borrow().len(),
-            Container::VecU128(r) => r.borrow().len(),
-            Container::VecU256(r) => r.borrow().len(),
-            Container::VecBool(r) => r.borrow().len(),
-            Container::VecAddress(r) => r.borrow().len(),
-            Container::Vec(r) => r.borrow().len(),
-            Container::Locals(_) | Container::Struct(_) | Container::Variant { .. } => {
-                unreachable!()
-            }
-        };
-        Ok(Value::u64(len as u64))
+        let container = self.0.container();
+        Ok(Value(ValueImpl::U64(container.len() as u64)))
     }
 
     pub fn push_back(&self, e: Value, type_param: &Type, capacity: u64) -> PartialVMResult<()> {
-        let c = self.0.container();
-        check_elem_layout(type_param, c)?;
-
-        let size = match c {
-            Container::VecU8(r) => r.borrow().len(),
-            Container::VecU16(r) => r.borrow().len(),
-            Container::VecU32(r) => r.borrow().len(),
-            Container::VecU64(r) => r.borrow().len(),
-            Container::VecU128(r) => r.borrow().len(),
-            Container::VecU256(r) => r.borrow().len(),
-            Container::VecBool(r) => r.borrow().len(),
-            Container::VecAddress(r) => r.borrow().len(),
-            Container::Vec(r) => r.borrow().len(),
-            Container::Locals(_) | Container::Struct(_) | Container::Variant { .. } => {
-                unreachable!()
-            }
-        };
-        if size >= (capacity as usize) {
-            return Err(PartialVMError::new(StatusCode::VECTOR_OPERATION_ERROR)
-                .with_sub_status(VEC_SIZE_LIMIT_REACHED)
-                .with_message(format!("vector size limit is {capacity}",)));
+        let container = self.0.container();
+        let len = container.len();
+        if len >= capacity as usize {
+            return Err(PartialVMError::new(StatusCode::VEC_SIZE_LIMIT_REACHED)
+                .with_message(format!("vector size limit reached: {}", capacity)));
         }
-
-        match c {
-            Container::VecU8(r) => r.borrow_mut().push(e.value_as()?),
-            Container::VecU16(r) => r.borrow_mut().push(e.value_as()?),
-            Container::VecU32(r) => r.borrow_mut().push(e.value_as()?),
-            Container::VecU64(r) => r.borrow_mut().push(e.value_as()?),
-            Container::VecU128(r) => r.borrow_mut().push(e.value_as()?),
-            Container::VecU256(r) => r.borrow_mut().push(e.value_as()?),
-            Container::VecBool(r) => r.borrow_mut().push(e.value_as()?),
-            Container::VecAddress(r) => r.borrow_mut().push(e.value_as()?),
-            Container::Vec(r) => r.borrow_mut().push(e.0),
-            Container::Locals(_) | Container::Struct(_) | Container::Variant { .. } => {
-                unreachable!()
-            }
-        }
-
-        self.0.mark_dirty();
+        container.set(len, e.0)?;
         Ok(())
     }
 
     pub fn borrow_elem(&self, idx: usize, type_param: &Type) -> PartialVMResult<Value> {
-        let c = self.0.container();
-        check_elem_layout(type_param, c)?;
-        if idx >= c.len() {
-            return Err(PartialVMError::new(StatusCode::VECTOR_OPERATION_ERROR)
-                .with_sub_status(INDEX_OUT_OF_BOUNDS));
-        }
-        Ok(Value(self.0.borrow_elem(idx)?))
+        let container = self.0.container();
+        let val = container.get(idx)?;
+        Ok(Value(val))
     }
 
-    /// Returns a RefCell reference to the underlying vector of a `&vector<u8>` value.
     pub fn as_bytes_ref(&self) -> std::cell::Ref<'_, Vec<u8>> {
-        let c = self.0.container();
-        match c {
+        match self.0.container() {
             Container::VecU8(r) => r.borrow(),
-            _ => panic!("can only be called on vector<u8>"),
+            _ => panic!("expected VecU8"),
         }
     }
 
     pub fn pop(&self, type_param: &Type) -> PartialVMResult<Value> {
-        let c = self.0.container();
-        check_elem_layout(type_param, c)?;
-
-        macro_rules! err_pop_empty_vec {
-            () => {
-                return Err(PartialVMError::new(StatusCode::VECTOR_OPERATION_ERROR)
-                    .with_sub_status(POP_EMPTY_VEC))
-            };
+        let container = self.0.container();
+        let len = container.len();
+        if len == 0 {
+            return Err(PartialVMError::new(StatusCode::POP_EMPTY_VEC)
+                .with_message("cannot pop empty vector".to_string()));
         }
-
-        let res = match c {
-            Container::VecU8(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::u8(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::VecU16(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::u16(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::VecU32(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::u32(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::VecU64(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::u64(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::VecU128(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::u128(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::VecU256(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::u256(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::VecBool(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::bool(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::VecAddress(r) => match r.borrow_mut().pop() {
-                Some(x) => Value::address(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::Vec(r) => match r.borrow_mut().pop() {
-                Some(x) => Value(x),
-                None => err_pop_empty_vec!(),
-            },
-            Container::Locals(_) | Container::Struct(_) | Container::Variant { .. } => {
-                unreachable!()
-            }
-        };
-
-        self.0.mark_dirty();
-        Ok(res)
+        let val = container.get(len - 1)?;
+        container.set(len - 1, ValueImpl::Invalid)?;
+        Ok(Value(val))
     }
 
     pub fn swap(&self, idx1: usize, idx2: usize, type_param: &Type) -> PartialVMResult<()> {
-        let c = self.0.container();
-        check_elem_layout(type_param, c)?;
-
-        macro_rules! swap {
-            ($v: expr) => {{
-                let mut v = $v.borrow_mut();
-                if idx1 >= v.len() || idx2 >= v.len() {
-                    return Err(PartialVMError::new(StatusCode::VECTOR_OPERATION_ERROR)
-                        .with_sub_status(INDEX_OUT_OF_BOUNDS));
-                }
-                v.swap(idx1, idx2);
-            }};
+        let container = self.0.container();
+        let len = container.len();
+        if idx1 >= len || idx2 >= len {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index out of bounds: got {}, len: {}", idx1.max(idx2), len)));
         }
-
-        match c {
-            Container::VecU8(r) => swap!(r),
-            Container::VecU16(r) => swap!(r),
-            Container::VecU32(r) => swap!(r),
-            Container::VecU64(r) => swap!(r),
-            Container::VecU128(r) => swap!(r),
-            Container::VecU256(r) => swap!(r),
-            Container::VecBool(r) => swap!(r),
-            Container::VecAddress(r) => swap!(r),
-            Container::Vec(r) => swap!(r),
-            Container::Locals(_) | Container::Struct(_) | Container::Variant { .. } => {
-                unreachable!()
-            }
-        }
-
-        self.0.mark_dirty();
+        let val1 = container.get(idx1)?;
+        let val2 = container.get(idx2)?;
+        container.set(idx1, val2)?;
+        container.set(idx2, val1)?;
         Ok(())
     }
 }
@@ -3301,13 +3394,13 @@ impl GlobalValueImpl {
         status: GlobalDataStatus,
     ) -> Result<Self, (PartialVMError, ValueImpl)> {
         match val {
-            ValueImpl::Container(Container::Struct(fields)) => {
-                let status = Arc::new(Mutex::new(status));
-                Ok(Self::Cached { fields, status })
-            }
-            val => Err((
-                PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                    .with_message("failed to publish cached: not a resource".to_string()),
+            ValueImpl::Container(c) => Ok(GlobalValueImpl::Cached {
+                fields: c,
+                status: Arc::new(Mutex::new(status)),
+            }),
+            _ => Err((
+                PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                    .with_message("expected container".to_string()),
                 val,
             )),
         }
@@ -3423,13 +3516,11 @@ impl GlobalValueImpl {
 
 impl GlobalValue {
     pub fn none() -> Self {
-        Self(GlobalValueImpl::None)
+        GlobalValue(GlobalValueImpl::None)
     }
 
     pub fn cached(val: Value) -> PartialVMResult<Self> {
-        Ok(Self(
-            GlobalValueImpl::cached(val.0, GlobalDataStatus::Clean).map_err(|(err, _val)| err)?,
-        ))
+        Ok(GlobalValue(GlobalValueImpl::cached(val.0, GlobalDataStatus::Clean)?))
     }
 
     pub fn move_from(&mut self) -> PartialVMResult<Value> {
@@ -3437,9 +3528,7 @@ impl GlobalValue {
     }
 
     pub fn move_to(&mut self, val: Value) -> Result<(), (PartialVMError, Value)> {
-        self.0
-            .move_to(val.0)
-            .map_err(|(err, val)| (err, Value(val)))
+        self.0.move_to(val.0).map_err(|(e, v)| (e, Value(v)))
     }
 
     pub fn borrow_global(&self) -> PartialVMResult<Value> {
@@ -3996,35 +4085,27 @@ impl serde::Serialize for AnnotatedValue<'_, '_, MoveTypeLayout, ValueImpl> {
 
 impl serde::Serialize for AnnotatedValue<'_, '_, MoveStructLayout, Vec<ValueImpl>> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_struct(
-            self.layout.type_name.as_str(),
-            self.layout.fields.iter().map(|f| f.name.as_str()),
-            self.val,
-        )
+        let mut state = serializer.serialize_struct("Struct", 1)?;
+        state.serialize_field("fields", &self.val)?;
+        state.end()
     }
 }
 
 impl serde::Serialize for AnnotatedValue<'_, '_, MoveEnumLayout, (VariantTag, Vec<ValueImpl>)> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let (tag, fields) = self.val;
-        serializer.serialize_enum(
-            self.layout.type_name.as_str(),
-            self.layout.variants[*tag as usize].name.as_str(),
-            AnnotatedValue {
-                layout: &MoveEnumLayout::new(self.layout),
-                val: fields,
-            },
-        )
+        let mut state = serializer.serialize_struct("Enum", 2)?;
+        state.serialize_field("tag", &self.val.0)?;
+        state.serialize_field("fields", &self.val.1)?;
+        state.end()
     }
 }
 
 impl<'a> serde::Serialize for AnnotatedValue<'a, '_, VariantFields<'a>, Vec<ValueImpl>> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_struct(
-            "variant",
-            self.0.iter().map(|f| f.name.as_str()),
-            self.val,
-        )
+        let mut state = serializer.serialize_struct("Variant", 2)?;
+        state.serialize_field("tag", &self.layout.tag)?;
+        state.serialize_field("fields", &self.val)?;
+        state.end()
     }
 }
 
