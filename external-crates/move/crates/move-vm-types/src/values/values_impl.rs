@@ -252,21 +252,416 @@ impl Container {
 
     fn rc_count(&self) -> usize {
         match self {
-            Self::Locals(r) | Self::Struct(r) | Self::Vec(r) => Arc::strong_count(&r),
-            Self::VecU8(r) => Arc::strong_count(&r),
-            Self::VecU16(r) => Arc::strong_count(&r),
-            Self::VecU32(r) => Arc::strong_count(&r),
-            Self::VecU64(r) => Arc::strong_count(&r),
-            Self::VecU128(r) => Arc::strong_count(&r),
-            Self::VecU256(r) => Arc::strong_count(&r),
-            Self::VecBool(r) => Arc::strong_count(&r),
-            Self::VecAddress(r) => Arc::strong_count(&r),
-            Self::Variant(r) => Arc::strong_count(&r),
+            Self::Locals(r) | Self::Struct(r) | Self::Vec(r) => Arc::strong_count(r),
+            Self::VecU8(r) => Arc::strong_count(r),
+            Self::VecU16(r) => Arc::strong_count(r),
+            Self::VecU32(r) => Arc::strong_count(r),
+            Self::VecU64(r) => Arc::strong_count(r),
+            Self::VecU128(r) => Arc::strong_count(r),
+            Self::VecU256(r) => Arc::strong_count(r),
+            Self::VecBool(r) => Arc::strong_count(r),
+            Self::VecAddress(r) => Arc::strong_count(r),
+            Self::Variant(r) => Arc::strong_count(r),
         }
     }
 
     fn signer(x: AccountAddress) -> Self {
         Container::Struct(Arc::new(Mutex::new(vec![ValueImpl::Address(Box::new(x))])))
+    }
+
+    fn equals(&self, other: &Self) -> PartialVMResult<bool> {
+        use Container::*;
+
+        let res = match (self, other) {
+            (Vec(l), Vec(r)) | (Struct(l), Struct(r)) => {
+                // Lock both mutexes in a consistent order to avoid deadlock
+                let (l_guard, r_guard) = if Arc::as_ptr(l) < Arc::as_ptr(r) {
+                    (l.lock().unwrap(), r.lock().unwrap())
+                } else {
+                    (r.lock().unwrap(), l.lock().unwrap())
+                };
+
+                if l_guard.len() != r_guard.len() {
+                    return Ok(false);
+                }
+                for (v1, v2) in l_guard.iter().zip(r_guard.iter()) {
+                    if !v1.equals(v2)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            (VecU8(l), VecU8(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU16(l), VecU16(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU32(l), VecU32(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU64(l), VecU64(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU128(l), VecU128(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU256(l), VecU256(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecBool(l), VecBool(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecAddress(l), VecAddress(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (Variant(l), Variant(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                let (tagl, valuesl) = &*l_guard;
+                let (tagr, valuesr) = &*r_guard;
+                if tagl != tagr {
+                    return Ok(false);
+                }
+
+                if valuesl.len() != valuesr.len() {
+                    return Ok(false);
+                }
+                for (v1, v2) in valuesl.iter().zip(valuesr) {
+                    if !v1.equals(v2)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            _ => false,
+        };
+
+        Ok(res)
+    }
+
+    fn raw_address(&self) -> usize {
+        match self {
+            Self::Locals(r) => Arc::as_ptr(r) as usize,
+            Self::Vec(r) => Arc::as_ptr(r) as usize,
+            Self::Struct(r) => Arc::as_ptr(r) as usize,
+            Self::VecU8(r) => Arc::as_ptr(r) as usize,
+            Self::VecU16(r) => Arc::as_ptr(r) as usize,
+            Self::VecU32(r) => Arc::as_ptr(r) as usize,
+            Self::VecU64(r) => Arc::as_ptr(r) as usize,
+            Self::VecU128(r) => Arc::as_ptr(r) as usize,
+            Self::VecU256(r) => Arc::as_ptr(r) as usize,
+            Self::VecBool(r) => Arc::as_ptr(r) as usize,
+            Self::VecAddress(r) => Arc::as_ptr(r) as usize,
+            Self::Variant(r) => Arc::as_ptr(r) as usize,
+        }
+    }
+
+    fn get(&self, idx: usize) -> PartialVMResult<ValueImpl> {
+        match self {
+            Self::Locals(r) | Self::Vec(r) | Self::Struct(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(v[idx].copy_value()?)
+            }
+            Self::Variant(r) => {
+                let (_, values) = &*r.lock().unwrap();
+                if idx >= values.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, values.len())));
+                }
+                Ok(values[idx].copy_value()?)
+            }
+            Self::VecU8(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::U8(v[idx]))
+            }
+            Self::VecU16(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::U16(v[idx]))
+            }
+            Self::VecU32(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::U32(v[idx]))
+            }
+            Self::VecU64(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::U64(v[idx]))
+            }
+            Self::VecU128(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::U128(Box::new(v[idx])))
+            }
+            Self::VecU256(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::U256(Box::new(v[idx])))
+            }
+            Self::VecBool(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::Bool(v[idx]))
+            }
+            Self::VecAddress(r) => {
+                let v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                Ok(ValueImpl::Address(Box::new(v[idx])))
+            }
+        }
+    }
+
+    fn set(&mut self, idx: usize, val: ValueImpl) -> PartialVMResult<()> {
+        match self {
+            Self::Locals(r) | Self::Vec(r) | Self::Struct(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                v[idx] = val;
+                Ok(())
+            }
+            Self::Variant(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.1.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.1.len())));
+                }
+                v.1[idx] = val;
+                Ok(())
+            }
+            Self::VecU8(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::U8(x) => {
+                        v[idx] = x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected u8".to_string())),
+                }
+            }
+            Self::VecU16(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::U16(x) => {
+                        v[idx] = x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected u16".to_string())),
+                }
+            }
+            Self::VecU32(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::U32(x) => {
+                        v[idx] = x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected u32".to_string())),
+                }
+            }
+            Self::VecU64(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::U64(x) => {
+                        v[idx] = x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected u64".to_string())),
+                }
+            }
+            Self::VecU128(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::U128(x) => {
+                        v[idx] = *x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected u128".to_string())),
+                }
+            }
+            Self::VecU256(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::U256(x) => {
+                        v[idx] = *x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected u256".to_string())),
+                }
+            }
+            Self::VecBool(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::Bool(x) => {
+                        v[idx] = x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected bool".to_string())),
+                }
+            }
+            Self::VecAddress(r) => {
+                let mut v = r.lock().unwrap();
+                if idx >= v.len() {
+                    return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                        .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
+                }
+                match val {
+                    ValueImpl::Address(x) => {
+                        v[idx] = *x;
+                        Ok(())
+                    }
+                    _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                        .with_message("expected address".to_string())),
+                }
+            }
+        }
+    }
+
+    fn take_unique_ownership<T>(r: Arc<Mutex<T>>) -> PartialVMResult<T> {
+        match Arc::try_unwrap(r) {
+            Ok(mutex) => Ok(mutex.into_inner().unwrap()),
+            Err(_) => Err(PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                .with_message("cannot take unique ownership of shared value".to_string())),
+        }
+    }
+
+    fn assign(&mut self, new: ValueImpl) -> PartialVMResult<()> {
+        match (self, new) {
+            (Container::Locals(r), ValueImpl::Container(Container::Locals(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::Vec(r), ValueImpl::Container(Container::Vec(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::Struct(r), ValueImpl::Container(Container::Struct(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecU8(r), ValueImpl::Container(Container::VecU8(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecU16(r), ValueImpl::Container(Container::VecU16(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecU32(r), ValueImpl::Container(Container::VecU32(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecU64(r), ValueImpl::Container(Container::VecU64(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecU128(r), ValueImpl::Container(Container::VecU128(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecU256(r), ValueImpl::Container(Container::VecU256(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecBool(r), ValueImpl::Container(Container::VecBool(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::VecAddress(r), ValueImpl::Container(Container::VecAddress(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            (Container::Variant(r), ValueImpl::Container(Container::Variant(new))) => {
+                *r.lock().unwrap() = take_unique_ownership(new)?;
+                Ok(())
+            }
+            _ => Err(PartialVMError::new(StatusCode::TYPE_MISMATCH)
+                .with_message("type mismatch in assignment".to_string())),
+        }
     }
 }
 
@@ -298,7 +693,8 @@ impl ContainerRef {
 
     fn mark_dirty(&self) {
         if let Self::Global { status, .. } = self {
-            *status.lock().unwrap() = GlobalDataStatus::Dirty
+            let mut guard = status.lock().unwrap();
+            *guard = GlobalDataStatus::Dirty;
         }
     }
 }
@@ -530,30 +926,68 @@ impl Container {
 
         let res = match (self, other) {
             (Vec(l), Vec(r)) | (Struct(l), Struct(r)) => {
-                let l = l.lock().unwrap();
-                let r = r.lock().unwrap();
+                // Lock both mutexes in a consistent order to avoid deadlock
+                let (l_guard, r_guard) = if Arc::as_ptr(l) < Arc::as_ptr(r) {
+                    (l.lock().unwrap(), r.lock().unwrap())
+                } else {
+                    (r.lock().unwrap(), l.lock().unwrap())
+                };
 
-                if l.len() != r.len() {
+                if l_guard.len() != r_guard.len() {
                     return Ok(false);
                 }
-                for (v1, v2) in l.iter().zip(r.iter()) {
+                for (v1, v2) in l_guard.iter().zip(r_guard.iter()) {
                     if !v1.equals(v2)? {
                         return Ok(false);
                     }
                 }
                 true
             }
-            (VecU8(l), VecU8(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
-            (VecU16(l), VecU16(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
-            (VecU32(l), VecU32(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
-            (VecU64(l), VecU64(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
-            (VecU128(l), VecU128(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
-            (VecU256(l), VecU256(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
-            (VecBool(l), VecBool(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
-            (VecAddress(l), VecAddress(r)) => l.lock().unwrap().eq(&*r.lock().unwrap()),
+            (VecU8(l), VecU8(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU16(l), VecU16(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU32(l), VecU32(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU64(l), VecU64(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU128(l), VecU128(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecU256(l), VecU256(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecBool(l), VecBool(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
+            (VecAddress(l), VecAddress(r)) => {
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                l_guard.eq(&*r_guard)
+            }
             (Variant(l), Variant(r)) => {
-                let (tagl, valuesl) = &*l.lock().unwrap();
-                let (tagr, valuesr) = &*r.lock().unwrap();
+                let l_guard = l.lock().unwrap();
+                let r_guard = r.lock().unwrap();
+                let (tagl, valuesl) = &*l_guard;
+                let (tagr, valuesr) = &*r_guard;
                 if tagl != tagr {
                     return Ok(false);
                 }
@@ -608,7 +1042,6 @@ impl IndexedRef {
             self.container_ref.container(),
             other.container_ref.container(),
         ) {
-            // VecC <=> VecR impossible
             (Vec(r1), Vec(r2))
             | (Vec(r1), Struct(r2))
             | (Vec(r1), Locals(r2))
@@ -841,14 +1274,15 @@ impl ContainerRef {
                             Container::$tc(v) => v,
                             _ => {
                                 return Err(PartialVMError::new(
-                                    StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
+                                    StatusCode::TYPE_MISMATCH,
                                 )
                                 .with_message(
                                     "failed to write_ref: container type mismatch".to_string(),
                                 ));
                             }
                         };
-                        *$r1.borrow_mut() = take_unique_ownership(r)?;
+                        let mut guard = $r1.lock().unwrap();
+                        *guard = take_unique_ownership(r)?;
                     }};
                 }
 
@@ -856,11 +1290,12 @@ impl ContainerRef {
                     Container::Struct(r) => assign!(r, Struct),
                     Container::Variant(r) => match c {
                         Container::Variant(new) => {
-                            *r.borrow_mut() = take_unique_ownership(new)?;
+                            let mut guard = r.lock().unwrap();
+                            *guard = take_unique_ownership(new)?;
                         }
                         _ => {
                             return Err(PartialVMError::new(
-                                StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
+                                StatusCode::TYPE_MISMATCH,
                             )
                             .with_message(
                                 "failed to write_ref: container type mismatch".to_string(),
@@ -887,7 +1322,7 @@ impl ContainerRef {
             }
             _ => {
                 return Err(
-                    PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                    PartialVMError::new(StatusCode::TYPE_MISMATCH)
                         .with_message(format!(
                             "cannot write value {:?} to container ref {:?}",
                             v, self
@@ -1011,36 +1446,40 @@ impl ContainerRef {
                     }
                     _ => unreachable!(),
                 };
-                match &v[idx] {
-                    // TODO: check for the impossible combinations.
-                    ValueImpl::Container(container) => {
-                        let r = match self {
-                            Self::Local(_) => Self::Local(container.copy_by_ref()),
-                            Self::Global { status, .. } => Self::Global {
-                                status: Rc::clone(status),
-                                container: container.copy_by_ref(),
-                            },
-                        };
-                        ValueImpl::ContainerRef(Box::new(r))
-                    }
-                    _ => ValueImpl::IndexedRef(Box::new(IndexedRef {
-                        idx,
-                        container_ref: self.copy_value(),
-                    })),
-                }
+                v[idx].copy_value()?
             }
-
-            Container::VecU8(_)
-            | Container::VecU16(_)
-            | Container::VecU32(_)
-            | Container::VecU64(_)
-            | Container::VecU128(_)
-            | Container::VecU256(_)
-            | Container::VecAddress(_)
-            | Container::VecBool(_) => ValueImpl::IndexedRef(Box::new(IndexedRef {
-                idx,
-                container_ref: self.copy_value(),
-            })),
+            Container::VecU8(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::U8(guard[idx])
+            }
+            Container::VecU16(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::U16(guard[idx])
+            }
+            Container::VecU32(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::U32(guard[idx])
+            }
+            Container::VecU64(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::U64(guard[idx])
+            }
+            Container::VecU128(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::U128(Box::new(guard[idx]))
+            }
+            Container::VecU256(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::U256(Box::new(guard[idx]))
+            }
+            Container::VecBool(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::Bool(guard[idx])
+            }
+            Container::VecAddress(r) => {
+                let guard = r.lock().unwrap();
+                ValueImpl::Address(Box::new(guard[idx]))
+            }
         };
 
         Ok(res)
@@ -1209,7 +1648,7 @@ impl SignerRef {
  **************************************************************************************/
 impl Locals {
     pub fn new(n: usize) -> Self {
-        Self(Rc::new(RefCell::new(
+        Self(Arc::new(Mutex::new(
             iter::repeat_with(|| ValueImpl::Invalid).take(n).collect(),
         )))
     }
@@ -2588,7 +3027,7 @@ impl Vector {
             ),
 
             VectorSpecialization::Container => Value(ValueImpl::Container(Container::Vec(
-                Rc::new(RefCell::new(elements.into_iter().map(|v| v.0).collect())),
+                Arc::new(Mutex::new(elements.into_iter().map(|v| v.0).collect())),
             ))),
         };
 
@@ -3106,7 +3545,7 @@ impl Display for ContainerRef {
                 f,
                 "(&container {:x} -- {:?})",
                 container.raw_address(),
-                &*status.borrow(),
+                &*status.lock().unwrap(),
             ),
         }
     }
@@ -3241,51 +3680,73 @@ pub mod debug {
         I: IntoIterator<Item = &'a X>,
         F: Fn(&mut B, &X) -> PartialVMResult<()>,
     {
-        debug_write!(buf, "{}", begin)?;
-        let mut it = items.into_iter();
-        if let Some(x) = it.next() {
-            print(buf, x)?;
-            for x in it {
-                debug_write!(buf, ", ")?;
-                print(buf, x)?;
+        write!(buf, "{}", begin)?;
+        let mut first = true;
+        for item in items {
+            if !first {
+                write!(buf, ", ")?;
             }
+            first = false;
+            print(buf, item)?;
         }
-        debug_write!(buf, "{}", end)?;
+        write!(buf, "{}", end)?;
         Ok(())
     }
 
     fn print_container<B: Write>(buf: &mut B, c: &Container) -> PartialVMResult<()> {
         match c {
-            Container::Vec(r) => print_list(buf, "[", r.borrow().iter(), print_value_impl, "]"),
-
+            Container::Locals(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_value_impl, "]")
+            }
+            Container::Vec(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_value_impl, "]")
+            }
             Container::Struct(r) => {
-                print_list(buf, "{ ", r.borrow().iter(), print_value_impl, " }")
+                let guard = r.lock().unwrap();
+                print_list(buf, "{", guard.iter(), print_value_impl, "}")
             }
-
+            Container::VecU8(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_u8, "]")
+            }
+            Container::VecU16(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_u16, "]")
+            }
+            Container::VecU32(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_u32, "]")
+            }
+            Container::VecU64(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_u64, "]")
+            }
+            Container::VecU128(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_u128, "]")
+            }
+            Container::VecU256(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_u256, "]")
+            }
+            Container::VecBool(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_bool, "]")
+            }
+            Container::VecAddress(r) => {
+                let guard = r.lock().unwrap();
+                print_list(buf, "[", guard.iter(), print_address, "]")
+            }
             Container::Variant(r) => {
-                let (tag, values) = &*r.borrow();
-                print_list(
-                    buf,
-                    &format!("|{}|{{ ", tag),
-                    values,
-                    print_value_impl,
-                    " }",
-                )
+                let guard = r.lock().unwrap();
+                let (tag, values) = &*guard;
+                write!(buf, "Variant({}, ", tag)?;
+                print_list(buf, "[", values.iter(), print_value_impl, "]")?;
+                write!(buf, ")")?;
+                Ok(())
             }
-
-            Container::VecU8(r) => print_list(buf, "[", r.borrow().iter(), print_u8, "]"),
-            Container::VecU16(r) => print_list(buf, "[", r.borrow().iter(), print_u16, "]"),
-            Container::VecU32(r) => print_list(buf, "[", r.borrow().iter(), print_u32, "]"),
-            Container::VecU64(r) => print_list(buf, "[", r.borrow().iter(), print_u64, "]"),
-            Container::VecU128(r) => print_list(buf, "[", r.borrow().iter(), print_u128, "]"),
-            Container::VecU256(r) => print_list(buf, "[", r.borrow().iter(), print_u256, "]"),
-            Container::VecBool(r) => print_list(buf, "[", r.borrow().iter(), print_bool, "]"),
-            Container::VecAddress(r) => print_list(buf, "[", r.borrow().iter(), print_address, "]"),
-
-            Container::Locals(_) => Err(PartialVMError::new(
-                StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
-            )
-            .with_message("debug print - invalid container: Locals".to_string())),
         }
     }
 
@@ -3299,13 +3760,11 @@ pub mod debug {
         B: Write,
         F: FnOnce(&mut B, &X) -> PartialVMResult<()>,
     {
-        match v.get(idx) {
-            Some(x) => print(buf, x),
-            None => Err(
-                PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                    .with_message("ref index out of bounds".to_string()),
-            ),
+        if idx >= v.len() {
+            return Err(PartialVMError::new(StatusCode::INDEX_OUT_OF_BOUNDS)
+                .with_message(format!("index out of bounds: got {}, len: {}", idx, v.len())));
         }
+        print(buf, &v[idx])
     }
 
     fn print_indexed_ref<B: Write>(buf: &mut B, r: &IndexedRef) -> PartialVMResult<()> {
@@ -3406,86 +3865,130 @@ fn invariant_violation<S: serde::Serializer>(message: String) -> S::Error {
 
 impl serde::Serialize for AnnotatedValue<'_, '_, MoveTypeLayout, ValueImpl> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use MoveTypeLayout as L;
+
         match (self.layout, self.val) {
-            (MoveTypeLayout::U8, ValueImpl::U8(x)) => serializer.serialize_u8(*x),
-            (MoveTypeLayout::U16, ValueImpl::U16(x)) => serializer.serialize_u16(*x),
-            (MoveTypeLayout::U32, ValueImpl::U32(x)) => serializer.serialize_u32(*x),
-            (MoveTypeLayout::U64, ValueImpl::U64(x)) => serializer.serialize_u64(*x),
-            (MoveTypeLayout::U128, ValueImpl::U128(x)) => serializer.serialize_u128(**x),
-            (MoveTypeLayout::U256, ValueImpl::U256(x)) => x.serialize(serializer),
-            (MoveTypeLayout::Bool, ValueImpl::Bool(x)) => serializer.serialize_bool(*x),
-            (MoveTypeLayout::Address, ValueImpl::Address(x)) => x.serialize(serializer),
-
-            (MoveTypeLayout::Struct(struct_layout), ValueImpl::Container(Container::Struct(r))) => {
-                (AnnotatedValue {
-                    layout: &**struct_layout,
-                    val: &*r.borrow(),
-                })
-                .serialize(serializer)
+            (L::U8, ValueImpl::U8(x)) => serializer.serialize_u8(*x),
+            (L::U16, ValueImpl::U16(x)) => serializer.serialize_u16(*x),
+            (L::U32, ValueImpl::U32(x)) => serializer.serialize_u32(*x),
+            (L::U64, ValueImpl::U64(x)) => serializer.serialize_u64(*x),
+            (L::U128, ValueImpl::U128(x)) => serializer.serialize_u128(**x),
+            (L::U256, ValueImpl::U256(x)) => serializer.serialize_u256(**x),
+            (L::Bool, ValueImpl::Bool(x)) => serializer.serialize_bool(*x),
+            (L::Address, ValueImpl::Address(x)) => serializer.serialize_address(**x),
+            (L::Signer, ValueImpl::Container(Container::Struct(r))) => {
+                let guard = r.lock().unwrap();
+                serializer.serialize_address(guard[0].as_address().unwrap())
             }
-
-            (MoveTypeLayout::Enum(enum_layout), ValueImpl::Container(Container::Variant(r))) => {
-                (AnnotatedValue {
-                    layout: &**enum_layout,
-                    val: &*r.borrow(),
-                })
-                .serialize(serializer)
+            (L::Struct(layout), ValueImpl::Container(Container::Struct(r))) => {
+                let guard = r.lock().unwrap();
+                serializer.serialize_struct(
+                    layout.type_name.as_str(),
+                    layout.fields.iter().map(|f| f.name.as_str()),
+                    AnnotatedValue {
+                        layout: &MoveStructLayout::new(layout),
+                        val: &*guard,
+                    },
+                )
             }
-
-            (MoveTypeLayout::Vector(layout), ValueImpl::Container(c)) => {
-                let layout = &**layout;
-                match (layout, c) {
-                    (MoveTypeLayout::U8, Container::VecU8(r)) => r.borrow().serialize(serializer),
-                    (MoveTypeLayout::U16, Container::VecU16(r)) => r.borrow().serialize(serializer),
-                    (MoveTypeLayout::U32, Container::VecU32(r)) => r.borrow().serialize(serializer),
-                    (MoveTypeLayout::U64, Container::VecU64(r)) => r.borrow().serialize(serializer),
-                    (MoveTypeLayout::U128, Container::VecU128(r)) => {
-                        r.borrow().serialize(serializer)
-                    }
-                    (MoveTypeLayout::U256, Container::VecU256(r)) => {
-                        r.borrow().serialize(serializer)
-                    }
-                    (MoveTypeLayout::Bool, Container::VecBool(r)) => {
-                        r.borrow().serialize(serializer)
-                    }
-                    (MoveTypeLayout::Address, Container::VecAddress(r)) => {
-                        r.borrow().serialize(serializer)
-                    }
-
-                    (_, Container::Vec(r)) => {
-                        let v = r.borrow();
-                        let mut t = serializer.serialize_seq(Some(v.len()))?;
-                        for val in v.iter() {
-                            t.serialize_element(&AnnotatedValue { layout, val })?;
+            (L::Enum(layout), ValueImpl::Container(Container::Variant(r))) => {
+                let guard = r.lock().unwrap();
+                let (tag, fields) = &*guard;
+                serializer.serialize_enum(
+                    layout.type_name.as_str(),
+                    layout.variants[*tag as usize].name.as_str(),
+                    AnnotatedValue {
+                        layout: &MoveEnumLayout::new(layout),
+                        val: &(*tag, fields.clone()),
+                    },
+                )
+            }
+            (L::Vector(layout), ValueImpl::Container(c)) => {
+                match (layout.as_ref(), c) {
+                    (L::U8, Container::VecU8(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_u8(*x)?;
                         }
-                        t.end()
+                        serializer.end()
                     }
-
-                    (layout, container) => Err(invariant_violation::<S>(format!(
-                        "cannot serialize container {:?} as {:?}",
-                        container, layout
+                    (L::U16, Container::VecU16(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_u16(*x)?;
+                        }
+                        serializer.end()
+                    }
+                    (L::U32, Container::VecU32(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_u32(*x)?;
+                        }
+                        serializer.end()
+                    }
+                    (L::U64, Container::VecU64(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_u64(*x)?;
+                        }
+                        serializer.end()
+                    }
+                    (L::U128, Container::VecU128(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_u128(*x)?;
+                        }
+                        serializer.end()
+                    }
+                    (L::U256, Container::VecU256(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_u256(*x)?;
+                        }
+                        serializer.end()
+                    }
+                    (L::Bool, Container::VecBool(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_bool(*x)?;
+                        }
+                        serializer.end()
+                    }
+                    (L::Address, Container::VecAddress(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_address(*x)?;
+                        }
+                        serializer.end()
+                    }
+                    (layout, Container::Vec(r)) => {
+                        let guard = r.lock().unwrap();
+                        serializer.serialize_seq(Some(guard.len()))?;
+                        for x in guard.iter() {
+                            serializer.serialize_value(AnnotatedValue {
+                                layout,
+                                val: x,
+                            })?;
+                        }
+                        serializer.end()
+                    }
+                    _ => Err(invariant_violation(format!(
+                        "cannot serialize value {:?} with layout {:?}",
+                        self.val, self.layout
                     ))),
                 }
             }
-
-            (MoveTypeLayout::Signer, ValueImpl::Container(Container::Struct(r))) => {
-                let v = r.borrow();
-                if v.len() != 1 {
-                    return Err(invariant_violation::<S>(format!(
-                        "cannot serialize container as a signer -- expected 1 field got {}",
-                        v.len()
-                    )));
-                }
-                (AnnotatedValue {
-                    layout: &MoveTypeLayout::Address,
-                    val: &v[0],
-                })
-                .serialize(serializer)
-            }
-
-            (ty, val) => Err(invariant_violation::<S>(format!(
-                "cannot serialize value {:?} as {:?}",
-                val, ty
+            _ => Err(invariant_violation(format!(
+                "cannot serialize value {:?} with layout {:?}",
+                self.val, self.layout
             ))),
         }
     }
@@ -3493,77 +3996,35 @@ impl serde::Serialize for AnnotatedValue<'_, '_, MoveTypeLayout, ValueImpl> {
 
 impl serde::Serialize for AnnotatedValue<'_, '_, MoveStructLayout, Vec<ValueImpl>> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let values = &self.val;
-        let fields = self.layout.fields();
-        if fields.len() != values.len() {
-            return Err(invariant_violation::<S>(format!(
-                "cannot serialize struct value {:?} as {:?} -- number of fields mismatch",
-                self.val, self.layout
-            )));
-        }
-        let mut t = serializer.serialize_tuple(values.len())?;
-        for (field_layout, val) in fields.iter().zip(values.iter()) {
-            t.serialize_element(&AnnotatedValue {
-                layout: field_layout,
-                val,
-            })?;
-        }
-        t.end()
+        serializer.serialize_struct(
+            self.layout.type_name.as_str(),
+            self.layout.fields.iter().map(|f| f.name.as_str()),
+            self.val,
+        )
     }
 }
 
 impl serde::Serialize for AnnotatedValue<'_, '_, MoveEnumLayout, (VariantTag, Vec<ValueImpl>)> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let (tag, values) = &self.val;
-        let tag = if *tag as u64 > VARIANT_COUNT_MAX {
-            return Err(serde::ser::Error::custom(format!(
-                "Variant tag {} is greater than the maximum allowed value of {}",
-                tag, VARIANT_COUNT_MAX
-            )));
-        } else {
-            *tag as u8
-        };
-
-        let fields = &self.layout.0[tag as usize];
-        if fields.len() != values.len() {
-            return Err(invariant_violation::<S>(format!(
-                "cannot serialize variant value {:?} as {:?} -- number of fields mismatch",
-                self.val, self.layout
-            )));
-        }
-
-        let mut t = serializer.serialize_tuple(2)?;
-        t.serialize_element(&tag)?;
-
-        t.serialize_element(&AnnotatedValue {
-            layout: &VariantFields(fields),
-            val: values,
-        })?;
-
-        t.end()
+        let (tag, fields) = self.val;
+        serializer.serialize_enum(
+            self.layout.type_name.as_str(),
+            self.layout.variants[*tag as usize].name.as_str(),
+            AnnotatedValue {
+                layout: &MoveEnumLayout::new(self.layout),
+                val: fields,
+            },
+        )
     }
 }
 
-struct VariantFields<'a>(&'a [MoveTypeLayout]);
-
 impl<'a> serde::Serialize for AnnotatedValue<'a, '_, VariantFields<'a>, Vec<ValueImpl>> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let values = self.val;
-        let types = self.layout.0;
-        if types.len() != values.len() {
-            return Err(invariant_violation::<S>(format!(
-                "cannot serialize variant value {:?} as {:?} -- number of fields mismatch",
-                self.val, self.layout.0
-            )));
-        }
-        let mut t = serializer.serialize_tuple(values.len())?;
-        for (field_layout, val) in types.iter().zip(values.iter()) {
-            t.serialize_element(&AnnotatedValue {
-                layout: field_layout,
-                val,
-            })?;
-        }
-        t.end()
+        serializer.serialize_struct(
+            "variant",
+            self.0.iter().map(|f| f.name.as_str()),
+            self.val,
+        )
     }
 }
 
@@ -3582,56 +4043,72 @@ impl<'d> serde::de::DeserializeSeed<'d> for SeedWrapper<&MoveTypeLayout> {
         use MoveTypeLayout as L;
 
         match self.layout {
-            L::Bool => bool::deserialize(deserializer).map(Value::bool),
-            L::U8 => u8::deserialize(deserializer).map(Value::u8),
-            L::U16 => u16::deserialize(deserializer).map(Value::u16),
-            L::U32 => u32::deserialize(deserializer).map(Value::u32),
-            L::U64 => u64::deserialize(deserializer).map(Value::u64),
-            L::U128 => u128::deserialize(deserializer).map(Value::u128),
-            L::U256 => u256::U256::deserialize(deserializer).map(Value::u256),
-            L::Address => AccountAddress::deserialize(deserializer).map(Value::address),
-            L::Signer => AccountAddress::deserialize(deserializer).map(Value::signer),
-
-            L::Struct(struct_layout) => Ok(SeedWrapper {
-                layout: &**struct_layout,
+            L::U8 => Ok(Value(ValueImpl::U8(deserializer.deserialize_u8(u8::deserialize)?))),
+            L::U16 => Ok(Value(ValueImpl::U16(deserializer.deserialize_u16(u16::deserialize)?))),
+            L::U32 => Ok(Value(ValueImpl::U32(deserializer.deserialize_u32(u32::deserialize)?))),
+            L::U64 => Ok(Value(ValueImpl::U64(deserializer.deserialize_u64(u64::deserialize)?))),
+            L::U128 => Ok(Value(ValueImpl::U128(Box::new(
+                deserializer.deserialize_u128(u128::deserialize)?,
+            )))),
+            L::U256 => Ok(Value(ValueImpl::U256(Box::new(
+                deserializer.deserialize_u256(u256::U256::deserialize)?,
+            )))),
+            L::Bool => Ok(Value(ValueImpl::Bool(deserializer.deserialize_bool(bool::deserialize)?))),
+            L::Address => Ok(Value(ValueImpl::Address(Box::new(
+                deserializer.deserialize_address(AccountAddress::deserialize)?,
+            )))),
+            L::Signer => Ok(Value(ValueImpl::Container(Container::signer(
+                deserializer.deserialize_address(AccountAddress::deserialize)?,
+            )))),
+            L::Struct(layout) => {
+                let v = deserializer.deserialize_struct(
+                    layout.type_name.as_str(),
+                    layout.fields.iter().map(|f| f.name.as_str()),
+                    StructFieldVisitor(&layout.fields),
+                )?;
+                Ok(Value(ValueImpl::Container(Container::Struct(Arc::new(Mutex::new(v))))))
             }
-            .deserialize(deserializer)?),
-
-            L::Enum(enum_layout) => Ok(SeedWrapper {
-                layout: &**enum_layout,
+            L::Enum(layout) => {
+                let v = deserializer.deserialize_enum(
+                    layout.type_name.as_str(),
+                    layout.variants.iter().map(|v| v.name.as_str()),
+                    EnumFieldVisitor(&layout.variants),
+                )?;
+                Ok(Value(ValueImpl::Container(Container::Variant(Arc::new(Mutex::new((
+                    v.tag,
+                    v.fields,
+                )))))))
             }
-            .deserialize(deserializer)?),
-
             L::Vector(layout) => {
-                let container = match &**layout {
+                let container = match layout.as_ref() {
                     L::U8 => {
-                        Container::VecU8(Rc::new(RefCell::new(Vec::deserialize(deserializer)?)))
+                        Container::VecU8(Arc::new(Mutex::new(Vec::deserialize(deserializer)?)))
                     }
                     L::U16 => {
-                        Container::VecU16(Rc::new(RefCell::new(Vec::deserialize(deserializer)?)))
+                        Container::VecU16(Arc::new(Mutex::new(Vec::deserialize(deserializer)?)))
                     }
                     L::U32 => {
-                        Container::VecU32(Rc::new(RefCell::new(Vec::deserialize(deserializer)?)))
+                        Container::VecU32(Arc::new(Mutex::new(Vec::deserialize(deserializer)?)))
                     }
                     L::U64 => {
-                        Container::VecU64(Rc::new(RefCell::new(Vec::deserialize(deserializer)?)))
+                        Container::VecU64(Arc::new(Mutex::new(Vec::deserialize(deserializer)?)))
                     }
                     L::U128 => {
-                        Container::VecU128(Rc::new(RefCell::new(Vec::deserialize(deserializer)?)))
+                        Container::VecU128(Arc::new(Mutex::new(Vec::deserialize(deserializer)?)))
                     }
                     L::U256 => {
-                        Container::VecU256(Rc::new(RefCell::new(Vec::deserialize(deserializer)?)))
+                       Container::VecU256(Arc::new(Mutex::new(Vec::deserialize(deserializer)?)))
                     }
                     L::Bool => {
-                        Container::VecBool(Rc::new(RefCell::new(Vec::deserialize(deserializer)?)))
+                         Container::VecBool(Arc::new(Mutex::new(Vec::deserialize(deserializer)?)))
                     }
-                    L::Address => Container::VecAddress(Rc::new(RefCell::new(Vec::deserialize(
+                    L::Address => Container::VecAddress(Arc::new(Mutex::new(Vec::deserialize(
                         deserializer,
                     )?))),
                     layout => {
                         let v = deserializer
                             .deserialize_seq(VectorElementVisitor(SeedWrapper { layout }))?;
-                        Container::Vec(Rc::new(RefCell::new(v)))
+                        Container::Vec(Arc::new(Mutex::new(v)))
                     }
                 };
                 Ok(Value(ValueImpl::Container(container)))
@@ -3660,7 +4137,10 @@ impl<'d> serde::de::DeserializeSeed<'d> for SeedWrapper<&MoveEnumLayout> {
         self,
         deserializer: D,
     ) -> Result<Self::Value, D::Error> {
-        let variant = deserializer.deserialize_tuple(2, EnumFieldVisitor(&self.layout.0))?;
+        let variant = deserializer.deserialize_enum(
+            "MoveEnum",
+            EnumFieldVisitor(&self.layout.variants),
+        )?;
         Ok(Value::variant(variant))
     }
 }
@@ -4127,63 +4607,63 @@ pub mod prop {
             L::Vector(layout) => match &**layout {
                 L::U8 => vec(any::<u8>(), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::VecU8(Rc::new(
-                            RefCell::new(vals),
+                        Value(ValueImpl::Container(Container::VecU8(Arc::new(
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 L::U16 => vec(any::<u16>(), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::VecU16(Rc::new(
-                            RefCell::new(vals),
+                        Value(ValueImpl::Container(Container::VecU16(Arc::new(
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 L::U32 => vec(any::<u32>(), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::VecU32(Rc::new(
-                            RefCell::new(vals),
+                        Value(ValueImpl::Container(Container::VecU32(Arc::new(
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 L::U64 => vec(any::<u64>(), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::VecU64(Rc::new(
-                            RefCell::new(vals),
+                        Value(ValueImpl::Container(Container::VecU64(Arc::new(
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 L::U128 => vec(any::<u128>(), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::VecU128(Rc::new(
-                            RefCell::new(vals),
+                        Value(ValueImpl::Container(Container::VecU128(Arc::new(
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 L::U256 => vec(any::<u256::U256>(), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::VecU256(Rc::new(
-                            RefCell::new(vals),
+                        Value(ValueImpl::Container(Container::VecU256(Arc::new(
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 L::Bool => vec(any::<bool>(), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::VecBool(Rc::new(
-                            RefCell::new(vals),
+                        Value(ValueImpl::Container(Container::VecBool(Arc::new(
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 L::Address => vec(any::<AccountAddress>(), 0..10)
                     .prop_map(|vals| {
                         Value(ValueImpl::Container(Container::VecAddress(Rc::new(
-                            RefCell::new(vals),
+                            Mutex::new(vals),
                         ))))
                     })
                     .boxed(),
                 layout => vec(value_strategy_with_layout(layout), 0..10)
                     .prop_map(|vals| {
-                        Value(ValueImpl::Container(Container::Vec(Rc::new(RefCell::new(
+                        Value(ValueImpl::Container(Container::Vec(Arc::new(Mutex::new(
                             vals.into_iter().map(|val| val.0).collect(),
                         )))))
                     })
