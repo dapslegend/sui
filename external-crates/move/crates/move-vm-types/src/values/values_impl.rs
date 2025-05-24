@@ -11,6 +11,7 @@ use move_binary_format::{
     file_format::{Constant, SignatureToken, VariantTag},
 };
 use std::borrow::Borrow;
+use std::borrow::BorrowMut;
 use std::rc::Rc;
 use std::cell::RefCell;
 
